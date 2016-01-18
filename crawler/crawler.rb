@@ -1,18 +1,13 @@
 require 'log4r'
 require 'yajl'
 require 'em-http'
-require 'em-stathat'
+require "redis"
 
 include EM
 
 ##
 ## Setup
 ##
-
-StatHat.config do |c|
-  c.ukey  = ENV['STATHATKEY']
-  c.email = 'ilya@igvita.com'
-end
 
 @log = Log4r::Logger.new('github')
 @log.add(Log4r::StdoutOutputter.new('console', {
@@ -35,10 +30,12 @@ EM.run do
   @latest = []
   @latest_key = lambda { |e| "#{e['id']}" }
 
+  @redis = Redis.new
+
   process = Proc.new do
       req = HttpRequest.new("https://api.github.com/events?per_page=200", {
-        :inactivity_timeout => 5,
-        :connect_timeout => 5
+        :inactivity_timeout => 25,
+        :connect_timeout => 25
       }).get({
       :head => {
         'user-agent' => 'githubarchive.org',
@@ -54,36 +51,22 @@ EM.run do
 
         @latest = urls
         new_events.sort_by {|e| [Time.parse(e['created_at']), e['id']] }.each do |event|
-          timestamp = Time.parse(event['created_at']).strftime('%Y-%m-%d-%-k')
-          archive = "data/#{timestamp}.json"
-
-          if @file.nil? || (archive != @file.to_path)
-            if !@file.nil?
-              @log.info "Rotating archive. Current: #{@file.to_path}, New: #{archive}"
-              @file.close
-            end
-
-            @file = File.new(archive, "a+")
-          end
-
-          @file.puts(Yajl::Encoder.encode(event))
+          @redis.rpush("github_events", Yajl::Encoder.encode(event))
         end
 
         remaining = req.response_header.raw['X-RateLimit-Remaining']
         reset = Time.at(req.response_header.raw['X-RateLimit-Reset'].to_i)
-        @log.info "Found #{new_events.size} new events: #{new_events.collect(&@latest_key)}, API: #{remaining}, reset: #{reset}"
+        @log.info "Found #{new_events.size} new events, API: #{remaining}, reset: #{reset}"
 
         if new_events.size >= 100
           @log.info "Missed records.."
         end
 
-        StatHat.new.ez_count('Github Events', new_events.size)
-
       rescue Exception => e
         @log.error "Processing exception: #{e}, #{e.backtrace.first(5)}"
         @log.error "Response: #{req.response_header}, #{req.response}"
       ensure
-        EM.add_timer(2.0, &process)
+        EM.add_timer(1.5, &process)
       end
     end
 
