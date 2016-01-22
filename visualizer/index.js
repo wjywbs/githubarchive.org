@@ -9,6 +9,8 @@ var client = redis.createClient();
 var events = initEvents();
 var trending = initTrending();
 
+var lastError = 0;
+
 function initEvents() {
   return {
     timestamp: new Date().getTime(),
@@ -36,8 +38,16 @@ function initTrending() {
 client.blpop("github_events", 0, processGithubEvent);
 function processGithubEvent(err, reply) {
   // reply: [key, value]
-  if (reply.length != 2)
+  if (!(reply instanceof Array) || reply.length != 2) {
+    // Prevent from writing in loop.
+    var now = new Date().getTime();
+    if (now - lastError > 1000)
+      console.log("Invalid event: " + reply);
+    lastError = now;
+
+    client.blpop("github_events", 0, processGithubEvent);
     return;
+  }
 
   try {
     var event = JSON.parse(reply[1]);
