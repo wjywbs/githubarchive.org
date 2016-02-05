@@ -142,6 +142,10 @@ app.get('/', function(req, res) {
   res.sendFile(__dirname + '/visual.html');
 });
 
+app.get('/gauge.min.js', function(req, res) {
+  res.sendFile(__dirname + '/gauge.min.js');
+});
+
 io.on('connection', function(socket) {
   socket.emit('set_events', events);
 });
